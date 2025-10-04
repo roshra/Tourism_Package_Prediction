@@ -5,13 +5,13 @@ import streamlit as st
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
 
-st.set_page_config(page_title="Tourism Wellness Predictor", page_icon="🧭")
+st.set_page_config(page_title="Tourism Wellness Predictor")
 
 # --- Locate model file (root or models/) ---
 MODEL_CANDIDATES = ["best_pipeline.joblib", "models/best_pipeline.joblib"]
 MODEL_PATH = next((p for p in MODEL_CANDIDATES if os.path.exists(p)), None)
 if MODEL_PATH is None:
-    st.error("❌ best_pipeline.joblib not found in Space. Push it to Space root or models/.")
+    st.error("best_pipeline.joblib not found in Space. Push it to Space root or models/.")
     st.stop()
 
 @st.cache_resource
@@ -97,6 +97,6 @@ if st.button("Predict"):
         pred = int(proba >= 0.5)
         st.success(f"Probability of purchase: **{proba:.2%}** — Prediction: **{'Will Purchase' if pred==1 else 'Will Not Purchase'}**")
     except Exception as e:
-        st.error(f"⚠️ Prediction failed: {e}")
+        st.error(f"Prediction failed: {e}")
         st.exception(e)
 
