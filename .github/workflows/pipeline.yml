@@ -1,0 +1,49 @@
+name: Tourism MLOps Pipeline
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch: {}
+
+jobs:
+  build-train-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pandas numpy scikit-learn xgboost mlflow joblib huggingface_hub streamlit
+
+      - name: Data registration
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_ID: ${{ vars.HF_DATASET_ID }}
+        run: python week_3_mls/model_building/data_register.py
+
+      - name: Prepare data
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_DATASET_ID: ${{ vars.HF_DATASET_ID }}
+        run: python week_3_mls/model_building/prep.py
+
+      - name: Train & register best model
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_MODEL_ID: ${{ vars.HF_MODEL_ID }}
+          HF_DATASET_ID: ${{ vars.HF_DATASET_ID }}
+        run: python week_3_mls/model_building/train.py
+
+      - name: Deploy to Hugging Face Space
+        if: ${{ success() }}
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE_ID: ${{ vars.HF_SPACE_ID }}
+        run: python week_3_mls/model_building/push_to_hf.py
