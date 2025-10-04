@@ -2,19 +2,16 @@ import os
 import joblib
 import pandas as pd
 import streamlit as st
+from sklearn.compose import ColumnTransformer
+from sklearn.preprocessing import OneHotEncoder
 
-st.set_page_config(page_title="Tourism Wellness Predictor", page_icon="🧭", layout="centered")
-st.title("🧭 Tourism Wellness Package — Purchase Prediction")
+st.set_page_config(page_title="Tourism Wellness Predictor", page_icon="🧭")
 
-# ---------------------------------------------------------
-# 1) Load trained pipeline (works in Space & locally)
-# ---------------------------------------------------------
-# We upload best_pipeline.joblib into the Space root.
-CANDIDATE_PATHS = ["best_pipeline.joblib", "models/best_pipeline.joblib"]
-MODEL_PATH = next((p for p in CANDIDATE_PATHS if os.path.exists(p)), None)
-
+# --- Locate model file (root or models/) ---
+MODEL_CANDIDATES = ["best_pipeline.joblib", "models/best_pipeline.joblib"]
+MODEL_PATH = next((p for p in MODEL_CANDIDATES if os.path.exists(p)), None)
 if MODEL_PATH is None:
-    st.error("❌ best_pipeline.joblib not found. Ensure your CI uploaded it to the Space.")
+    st.error("❌ best_pipeline.joblib not found in Space. Push it to Space root or models/.")
     st.stop()
 
 @st.cache_resource
@@ -24,100 +21,76 @@ def load_model():
 model = load_model()
 st.caption(f"Loaded model: `{MODEL_PATH}`")
 
-# ---------------------------------------------------------
-# 2) Define schema used during training
-#    (must match the columns your model expects)
-# ---------------------------------------------------------
-CAT_COLS = [
-    "TypeofContact","Occupation","Gender","MaritalStatus",
-    "ProductPitched","Designation"
-]
-NUM_COLS = [
-    "Age","CityTier","DurationOfPitch","NumberOfTrips","NumberOfFollowups",
-    "PreferredPropertyStar","NumberOfPersonVisiting","NumberOfChildrenVisiting",
-    "MonthlyIncome","PitchSatisfactionScore","Passport","OwnCar"
-]
-ALL_COLS = CAT_COLS + NUM_COLS
+# ---- Introspect the ColumnTransformer to see what the model expects
+try:
+    pre: ColumnTransformer = model.named_steps["pre"]
+    cats = []
+    nums = []
+    for name, tr, cols in pre.transformers_:
+        if name == "cat" and isinstance(tr, OneHotEncoder):
+            cats = list(cols)
+        elif name == "num":
+            # remainder could be 'drop' or a list; we only list assigned columns
+            nums = list(cols) if cols is not None else []
+    st.info(f"Model expects categorical columns (OHE): {cats}")
+    st.info(f"Model expects numeric columns: {nums}")
+except Exception as e:
+    st.warning(f"Could not inspect preprocessor: {e}")
 
-# Defaults for the "extra" features often missing in quick demos
-DEFAULTS = {
-    "CityTier": 2,
-    "Passport": 0,
-    "OwnCar": 0,
-    "PitchSatisfactionScore": 3,
+# ---- Build the input UI using the full schema shown above
+# Use the same lists (cats, nums) to build inputs, so we always send all columns.
+# Provide sensible defaults and enforce dtype before prediction.
+
+# Simple default choices for common categoricals:
+choices = {
+    "TypeofContact": ["Company Invited","Self Enquiry"],
+    "Occupation": ["Salaried","Small Business","Large Business","Freelancer","Others"],
+    "Gender": ["Male","Female"],
+    "MaritalStatus": ["Single","Married","Divorced"],
+    "ProductPitched": ["Basic","Standard","Deluxe","Super Deluxe","King"],
+    "Designation": ["Executive","Senior Manager","Manager","AVP","VP"],
 }
 
-# ---------------------------------------------------------
-# 3) UI — key fields first; others under Advanced
-# ---------------------------------------------------------
-col1, col2 = st.columns(2)
+st.subheader("Input")
+row = {}
 
-with col1:
-    Age = st.number_input("Age", min_value=0, max_value=110, value=35)
-    TypeofContact = st.selectbox("Type of Contact", ["Company Invited", "Self Enquiry"])
-    Occupation = st.selectbox("Occupation", ["Salaried","Small Business","Large Business","Freelancer","Others"])
-    Gender = st.selectbox("Gender", ["Male","Female"])
-    MaritalStatus = st.selectbox("Marital Status", ["Single","Married","Divorced"])
-    ProductPitched = st.selectbox("Product Pitched", ["Basic","Standard","Deluxe","Super Deluxe","King"])
+# Categorical inputs:
+for c in cats:
+    opts = choices.get(c)
+    if opts:
+        row[c] = st.selectbox(c, opts)
+    else:
+        row[c] = st.text_input(c, "Unknown")
 
-with col2:
-    DurationOfPitch = st.number_input("Duration Of Pitch (minutes)", min_value=0, max_value=600, value=30)
-    NumberOfTrips = st.number_input("Number Of Trips (avg/yr)", min_value=0, max_value=50, value=2)
-    NumberOfFollowups = st.number_input("Number Of Followups", min_value=0, max_value=50, value=2)
-    PreferredPropertyStar = st.selectbox("Preferred Property Star", [1,2,3,4,5], index=2)
-    NumberOfPersonVisiting = st.number_input("Number Of Persons Visiting", min_value=1, max_value=20, value=2)
-    NumberOfChildrenVisiting = st.number_input("Number Of Children Visiting (<5 yrs)", min_value=0, max_value=10, value=0)
-
-MonthlyIncome = st.number_input("Monthly Income", min_value=0, max_value=2_000_000, value=50_000, step=1000)
-
-with st.expander("Advanced options (optional)"):
-    CityTier = st.selectbox("City Tier", [1,2,3], index=DEFAULTS["CityTier"]-1)
-    Passport = st.selectbox("Passport (0/1)", [0,1], index=DEFAULTS["Passport"])
-    OwnCar = st.selectbox("Own Car (0/1)", [0,1], index=DEFAULTS["OwnCar"])
-    PitchSatisfactionScore = st.selectbox("Pitch Satisfaction Score", [1,2,3,4,5], index=DEFAULTS["PitchSatisfactionScore"]-1)
-
-# ---------------------------------------------------------
-# 4) Build single-row DataFrame with all required columns
-# ---------------------------------------------------------
-row = {
-    # categoricals (strings)
-    "TypeofContact": TypeofContact,
-    "Occupation": Occupation,
-    "Gender": Gender,
-    "MaritalStatus": MaritalStatus,
-    "ProductPitched": ProductPitched,
-    "Designation": st.selectbox("Designation", ["AVP","VP","Manager","Senior Manager","Executive"], index=4),
-
-    # numerics
-    "Age": Age,
-    "CityTier": locals().get("CityTier", DEFAULTS["CityTier"]),
-    "DurationOfPitch": DurationOfPitch,
-    "NumberOfTrips": NumberOfTrips,
-    "NumberOfFollowups": NumberOfFollowups,
-    "PreferredPropertyStar": PreferredPropertyStar,
-    "NumberOfPersonVisiting": NumberOfPersonVisiting,
-    "NumberOfChildrenVisiting": NumberOfChildrenVisiting,
-    "MonthlyIncome": MonthlyIncome,
-    "PitchSatisfactionScore": locals().get("PitchSatisfactionScore", DEFAULTS["PitchSatisfactionScore"]),
-    "Passport": locals().get("Passport", DEFAULTS["Passport"]),
-    "OwnCar": locals().get("OwnCar", DEFAULTS["OwnCar"]),
+# Numeric inputs (with safe defaults):
+num_defaults = {
+    "Age": 35, "CityTier": 2, "DurationOfPitch": 30, "NumberOfTrips": 2,
+    "NumberOfFollowups": 2, "PreferredPropertyStar": 3, "NumberOfPersonVisiting": 2,
+    "NumberOfChildrenVisiting": 0, "MonthlyIncome": 50000,
+    "PitchSatisfactionScore": 3, "Passport": 0, "OwnCar": 0
 }
+for n in nums:
+    # integer-like fields get integer inputs; others number_input
+    if n in {"Age","CityTier","NumberOfTrips","NumberOfFollowups","PreferredPropertyStar",
+             "NumberOfPersonVisiting","NumberOfChildrenVisiting","PitchSatisfactionScore",
+             "Passport","OwnCar"}:
+        row[n] = st.number_input(n, value=int(num_defaults.get(n, 0)))
+    else:
+        row[n] = st.number_input(n, value=float(num_defaults.get(n, 0.0)))
 
-# Ensure every expected column is present exactly once
-df = pd.DataFrame([{c: row[c] for c in ALL_COLS}])
+# Build DF with ALL expected columns, in the exact order:
+df = pd.DataFrame([{**{c: row.get(c, "Unknown") for c in cats},
+                    **{n: row.get(n, num_defaults.get(n, 0)) for n in nums}}])
 
-# Enforce dtypes expected by the training pipeline
-for c in CAT_COLS:
+# Enforce dtypes according to the model’s preprocessor:
+for c in cats:
     df[c] = df[c].astype("string")
-for c in NUM_COLS:
-    df[c] = pd.to_numeric(df[c], errors="coerce")
+for n in nums:
+    df[n] = pd.to_numeric(df[n], errors="coerce")
 
-st.write("### Preview of the row sent to the model")
-st.dataframe(df, use_container_width=True)
+st.write("### Row sent to the model")
+st.dataframe(df)
 
-# ---------------------------------------------------------
-# 5) Predict
-# ---------------------------------------------------------
 if st.button("Predict"):
     try:
         proba = model.predict_proba(df)[:, 1][0]
